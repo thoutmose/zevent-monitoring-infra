@@ -1,0 +1,173 @@
+groups:
+  - name: fleet
+    rules:
+      # Hosts in the [on_demand] inventory group (see hosts.ini) are only
+      # powered on when needed, so their node_exporter being unreachable is
+      # expected, not an incident — excluded here rather than skipped from
+      # scraping, so metrics still show up on their dashboard whenever they
+      # are running.
+      - alert: InstanceDown
+        expr: up{job="node_exporter", instance!~"srv-dev|srv-staging|srv-prod|srv-db|srv-linux"} == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "{{ $labels.instance }} is down"
+          description: "node_exporter on {{ $labels.instance }} has been unreachable for more than 2 minutes."
+
+      - alert: HostHighCpuLoad
+        expr: 100 - (avg by (instance) (rate(node_cpu_seconds_total{mode="idle"}[5m])) * 100) > 90
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High CPU load on {{ $labels.instance }}"
+          description: "CPU busy on {{ $labels.instance }} has been above 90% for 10 minutes (current: {{ printf \"%.1f\" $value }}%)."
+
+      - alert: HostOutOfMemory
+        expr: (node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes) * 100 < 10
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Low memory on {{ $labels.instance }}"
+          description: "Available memory on {{ $labels.instance }} has been below 10% for 5 minutes (current: {{ printf \"%.1f\" $value }}%)."
+
+      - alert: HostOutOfDiskSpace
+        expr: (node_filesystem_avail_bytes{fstype!~"tmpfs|overlay|squashfs"} / node_filesystem_size_bytes{fstype!~"tmpfs|overlay|squashfs"}) * 100 < 15
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Low disk space on {{ $labels.instance }} ({{ $labels.mountpoint }})"
+          description: "Available space on {{ $labels.instance }}:{{ $labels.mountpoint }} has been below 15% for 5 minutes (current: {{ printf \"%.1f\" $value }}%)."
+
+      - alert: HostHighLoad
+        expr: node_load5 / count without (cpu, mode) (node_cpu_seconds_total{mode="idle"}) > 1.5
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High load average on {{ $labels.instance }}"
+          description: "5-minute load average per core on {{ $labels.instance }} has been above 1.5 for 10 minutes (current: {{ printf \"%.2f\" $value }})."
+
+      - alert: HostReboot
+        expr: (time() - node_boot_time_seconds) < 10 * 60
+        for: 0m
+        labels:
+          severity: info
+        annotations:
+          summary: "{{ $labels.instance }} rebooted"
+          description: "{{ $labels.instance }} came back up less than 10 minutes ago."
+
+      # node_reboot_required and apt_upgrades_pending aren't built into
+      # node_exporter — the node_exporter role writes them via a textfile
+      # collector script (checks /run/reboot-required and `apt-get
+      # --just-print dist-upgrade`), refreshed on a timer and right after
+      # unattended-upgrades runs.
+      - alert: HostRebootRequired
+        expr: node_reboot_required == 1
+        for: 0m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Reboot required on {{ $labels.instance }}"
+          description: "A package update on {{ $labels.instance }} requires a reboot to take effect."
+
+      - alert: HostAptUpgradesPending
+        expr: apt_upgrades_pending > 0
+        for: 1h
+        labels:
+          severity: info
+        annotations:
+          summary: "Package upgrades pending on {{ $labels.instance }}"
+          description: "{{ $labels.instance }} has had {{ printf \"%.0f\" $value }} pending apt upgrade(s) for over an hour."
+
+      # cAdvisor down means per-container metrics/dashboards for that host
+      # are blind, even though the host itself (node_exporter) may be fine.
+      - alert: CadvisorDown
+        expr: up{job="cadvisor", instance!~"srv-dev|srv-staging|srv-prod|srv-db|srv-linux"} == 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "cAdvisor unreachable on {{ $labels.instance }}"
+          description: "Container-level metrics for {{ $labels.instance }} have been unavailable for 5 minutes."
+
+      - alert: ProbeFailure
+        expr: probe_success == 0
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "{{ $labels.instance }} is not responding"
+          description: "Blackbox probe of {{ $labels.instance }} has failed for more than 5 minutes."
+
+      - alert: ProbeSlowResponse
+        expr: probe_duration_seconds > 2
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.instance }} is responding slowly"
+          description: "Blackbox probe of {{ $labels.instance }} has taken more than 2s to respond for 10 minutes (current: {{ printf \"%.2f\" $value }}s)."
+
+      # Doesn't test anything by itself — always firing. Alertmanager pings
+      # the dead-man's-switch URL every time this fires/repeats (see the
+      # dedicated route in alertmanager.yml.j2); the external service pages
+      # if the pings *stop*, which is the only way to notice srv-monitoring
+      # itself going dark — everything else in this file can only alert
+      # about targets *other than* the box it's running on.
+      - alert: Watchdog
+        expr: vector(1) == 1
+        labels:
+          severity: none
+        annotations:
+          summary: "Dead-man's-switch heartbeat"
+          description: "Always firing by design — drives the external dead-man's-switch ping. If you see this alert itself stop, Alertmanager is the thing that's broken."
+
+  # zevent project: PostgreSQL on srv-db, covering both the "zevent" (prod)
+  # and "zevent-dev" (dev) databases on that one instance. Scoped to
+  # datname=~"zevent.*" throughout so these never fire on unrelated
+  # databases (postgres, template0/1, etc.) that happen to share the host.
+  - name: zevent-postgres
+    rules:
+      - alert: PostgresDown
+        expr: pg_up{instance="srv-db"} == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "PostgreSQL on {{ $labels.instance }} is down"
+          description: "postgres_exporter reports PostgreSQL on {{ $labels.instance }} unreachable for more than 2 minutes — both zevent and zevent-dev are affected."
+
+      - alert: PostgresConnectionsHigh
+        expr: sum by (instance) (pg_stat_database_numbackends{instance="srv-db",datname=~"zevent.*"}) / on(instance) pg_max_connections_max_connections{instance="srv-db"} * 100 > 80
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "PostgreSQL connections high on {{ $labels.instance }}"
+          description: "zevent + zevent-dev connections have used more than 80% of max_connections on {{ $labels.instance }} for 5 minutes (current: {{ printf \"%.1f\" $value }}%)."
+
+      - alert: PostgresDeadlocks
+        expr: increase(pg_stat_database_deadlocks{instance="srv-db",datname=~"zevent.*"}[5m]) > 0
+        for: 0m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Deadlock detected on {{ $labels.datname }}"
+          description: "{{ $labels.datname }} on {{ $labels.instance }} has had at least one deadlock in the last 5 minutes."
+
+      - alert: PostgresLowCacheHitRatio
+        expr: |
+          sum by (datname) (rate(pg_stat_database_blks_hit{instance="srv-db",datname=~"zevent.*"}[5m]))
+          /
+          (sum by (datname) (rate(pg_stat_database_blks_hit{instance="srv-db",datname=~"zevent.*"}[5m])) + sum by (datname) (rate(pg_stat_database_blks_read{instance="srv-db",datname=~"zevent.*"}[5m])))
+          * 100 < 90
+        for: 15m
+        labels:
+          severity: info
+        annotations:
+          summary: "Low cache hit ratio on {{ $labels.datname }}"
+          description: "Buffer cache hit ratio for {{ $labels.datname }} has been below 90% for 15 minutes (current: {{ printf \"%.1f\" $value }}%) — can indicate memory pressure on srv-db."

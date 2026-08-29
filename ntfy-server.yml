@@ -1,0 +1,19 @@
+base-url: "https://ntfy.thoutmose.me"
+
+# Reached from the internet via srv-npm; NPM terminates TLS and forwards
+# plain HTTP, so ntfy needs to trust its X-Forwarded-For/proto headers.
+behind-proxy: true
+
+# Deny by default: only users/topics explicitly granted access via
+# `ntfy access` (see tasks/main.yml) can read or publish. Without this,
+# anyone who guesses the topic name could read or spam it once exposed
+# to the internet.
+auth-file: "/var/lib/ntfy/auth.db"
+auth-default-access: "deny-all"
+
+cache-file: "/var/cache/ntfy/cache.db"
+
+# Prometheus metrics — bound to the compose network only (no host port is
+# published for it in docker-compose.yml.j2), scraped by Prometheus via the
+# "ntfy" service name so it never goes through srv-npm to the internet.
+metrics-listen-http: ":9091"

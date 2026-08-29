@@ -1,0 +1,123 @@
+services:
+  prometheus:
+    image: docker.io/prom/prometheus:latest
+    restart: unless-stopped
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./alert_rules.yml:/etc/prometheus/alert_rules.yml:ro
+      - prometheus_data:/prometheus
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.retention.time=30d
+    ports:
+      - "9090:9090"
+
+  grafana:
+    image: docker.io/grafana/grafana:latest
+    restart: unless-stopped
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: "CHANGEME"
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+    ports:
+      - "3000:3000"
+    depends_on:
+      - prometheus
+
+  # Routes firing/resolved alerts from Prometheus to the alertmanager-ntfy
+  # bridge, which reformats them into ntfy notifications.
+  alertmanager:
+    image: docker.io/prom/alertmanager:latest
+    restart: unless-stopped
+    volumes:
+      - ./alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
+      - alertmanager_data:/alertmanager
+    command:
+      - --config.file=/etc/alertmanager/alertmanager.yml
+      - --storage.path=/alertmanager
+    ports:
+      - "9093:9093"
+
+  # Alertmanager's webhook_configs sends a fixed JSON schema that ntfy can't
+  # parse directly, so this bridge (github.com/alexbakker/alertmanager-ntfy)
+  # translates it into ntfy's publish API. Internal-only, reached by
+  # alertmanager over the compose network.
+  alertmanager-ntfy:
+    image: ghcr.io/alexbakker/alertmanager-ntfy:latest
+    restart: unless-stopped
+    volumes:
+      - ./alertmanager-ntfy.yml:/config.yml:ro
+    command: ["--configs", "/config.yml"]
+    depends_on:
+      - ntfy
+
+  ntfy:
+    image: docker.io/binwiederhier/ntfy:latest
+    restart: unless-stopped
+    command: serve
+    volumes:
+      - ./ntfy-server.yml:/etc/ntfy/server.yml:ro
+      - ntfy_cache:/var/cache/ntfy
+      - ntfy_auth:/var/lib/ntfy
+    ports:
+      - "80:80"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q --tries=1 -O - http://localhost/v1/health | grep -q '\"healthy\":true'"]
+      interval: 60s
+      timeout: 10s
+
+  # Log aggregation — Promtail on every host (see roles/promtail) ships
+  # journal + container logs here. Grafana's "Loki" datasource reads it back
+  # (see grafana/provisioning/datasources/loki.yml). Port 3100 is published
+  # to the host, not just the compose network, because Promtail on every
+  # *other* host needs to reach it too.
+  loki:
+    image: docker.io/grafana/loki:latest
+    restart: unless-stopped
+    volumes:
+      - ./loki-config.yml:/etc/loki/config.yml:ro
+      - loki_data:/loki
+    command:
+      - --config.file=/etc/loki/config.yml
+    ports:
+      - "3100:3100"
+
+  # Synthetic HTTP/DNS/ICMP checks — is the *service* (and now the *host*,
+  # via ping) actually responding. Scraped by Prometheus's blackbox_http/
+  # blackbox_dns/blackbox_ping jobs (see prometheus.yml.j2 and
+  # blackbox.yml.j2 for the probed targets). Internal-only: Prometheus
+  # reaches it by service name over the compose network, so no host port
+  # is published.
+  # NET_RAW is required for the icmp prober to open raw ping sockets from
+  # inside the container (blackbox_ping job) — not needed for http/dns.
+  blackbox-exporter:
+    image: docker.io/prom/blackbox-exporter:latest
+    restart: unless-stopped
+    cap_add:
+      - NET_RAW
+    volumes:
+      - ./blackbox.yml:/etc/blackbox_exporter/config.yml:ro
+    command:
+      - --config.file=/etc/blackbox_exporter/config.yml
+
+  # Queries AdGuard Home's stats API remotely and re-exposes it as
+  # Prometheus metrics (query/block counts, DHCP leases, top clients and
+  # domains) — srv-adguard has no Docker of its own (see
+  # roles/adguard_home), so the exporter runs here instead and reaches out
+  # to it over the LAN.
+  adguard-exporter:
+    image: ghcr.io/henrywhitaker3/adguard-exporter:latest
+    restart: unless-stopped
+    environment:
+      ADGUARD_SERVERS: "http://192.168.1.42"
+      ADGUARD_USERNAMES: "thoutmose"
+      ADGUARD_PASSWORDS: "CHANGEME"
+
+volumes:
+  prometheus_data:
+  grafana_data:
+  alertmanager_data:
+  ntfy_cache:
+  ntfy_auth:
+  loki_data:

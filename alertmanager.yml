@@ -1,0 +1,31 @@
+route:
+  receiver: ntfy
+  group_by: ["alertname", "instance"]
+  group_wait: 30s
+  group_interval: 5m
+  repeat_interval: 4h
+  routes:
+    # The Watchdog alert (see alert_rules.yml.j2) always fires; route it to
+    # its own receiver with a short repeat_interval so it pings the external
+    # dead-man's-switch reliably, instead of going to ntfy every 4h.
+    - match:
+        alertname: Watchdog
+      receiver: deadmansswitch
+      group_wait: 0s
+      group_interval: 5m
+      repeat_interval: 5m
+
+receivers:
+  - name: ntfy
+    webhook_configs:
+      - url: "http://alertmanager-ntfy:8000/hook"
+        send_resolved: true
+        http_config:
+          basic_auth:
+            username: alertmanager
+            password: "CHANGEME"
+
+  - name: deadmansswitch
+    webhook_configs:
+      - url: "https://hc-ping.com/CHANGEME"
+        send_resolved: false

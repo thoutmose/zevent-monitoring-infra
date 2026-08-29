@@ -1,0 +1,19 @@
+# Custom metrics not covered by postgres_exporter's built-in collectors.
+# Loaded via --extend.query-path on srv-db's postgres_exporter service
+# (/etc/prometheus-postgres-exporter/queries.yaml — keep both copies in
+# sync). pg_database_size_bytes is NOT here: postgres_exporter already
+# exposes it by default for every database on the instance, including
+# zevent/zevent-dev once they exist — a separate custom query for it would
+# just be redundant.
+#
+# Note: the exporter's extend-queries format names the resulting metric
+# "<top-level key>_<column name>" — this query is named "pg_max_connections"
+# with a "max_connections" column, so the actual metric is
+# pg_max_connections_max_connections, not pg_max_connections. Verified via
+# curl localhost:9187/metrics on srv-db.
+pg_max_connections:
+  query: "SELECT setting::float AS max_connections FROM pg_settings WHERE name = 'max_connections'"
+  metrics:
+    - max_connections:
+        usage: "GAUGE"
+        description: "Configured max_connections for the instance"

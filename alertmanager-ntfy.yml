@@ -1,0 +1,30 @@
+http:
+  addr: :8000
+  auth:
+    username: "alertmanager"
+    password: "CHANGEME"
+
+ntfy:
+  baseurl: "http://ntfy:80"
+  auth:
+    basic:
+      username: "alertmanager"
+      password: "CHANGEME"
+  notification:
+    topic: "alerts"
+    priority: |
+      status == "firing" ? "urgent" : "default"
+    tags:
+      - tag: "+1"
+        condition: status == "resolved"
+      - tag: rotating_light
+        condition: status == "firing"
+    templates:
+      title: |
+        {{ if eq .Status "resolved" }}Resolved: {{ end }}{{ index .Labels "alertname" }} on {{ index .Labels "instance" }}
+      description: |
+        {{ index .Annotations "summary" }}
+      headers:
+        X-Click: |
+          {{ .GeneratorURL }}
+  async: false

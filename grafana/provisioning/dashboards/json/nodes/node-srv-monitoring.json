@@ -1,0 +1,157 @@
+{
+  "id": null,
+  "uid": "node-srv-monitoring",
+  "title": "Node: srv-monitoring",
+  "tags": ["node_exporter", "node"],
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "30s",
+  "time": { "from": "now-6h", "to": "now" },
+  "panels": [
+    {
+      "id": 1,
+      "type": "stat",
+      "title": "Status",
+      "datasource": "Prometheus",
+      "gridPos": { "h": 4, "w": 6, "x": 0, "y": 0 },
+      "targets": [
+        { "expr": "up{job=\"node_exporter\",instance=\"srv-monitoring\"}", "refId": "A" }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "mappings": [
+            { "type": "value", "options": { "0": { "text": "DOWN", "color": "red" }, "1": { "text": "UP", "color": "green" } } }
+          ],
+          "color": { "mode": "thresholds" },
+          "thresholds": { "mode": "absolute", "steps": [ { "color": "red", "value": null }, { "color": "green", "value": 1 } ] }
+        }
+      }
+    },
+    {
+      "id": 2,
+      "type": "stat",
+      "title": "CPU Cores",
+      "datasource": "Prometheus",
+      "gridPos": { "h": 4, "w": 6, "x": 6, "y": 0 },
+      "targets": [
+        { "expr": "count(count by (cpu) (node_cpu_seconds_total{instance=\"srv-monitoring\"}))", "refId": "A" }
+      ]
+    },
+    {
+      "id": 3,
+      "type": "stat",
+      "title": "Uptime",
+      "datasource": "Prometheus",
+      "gridPos": { "h": 4, "w": 6, "x": 12, "y": 0 },
+      "targets": [
+        { "expr": "time() - node_boot_time_seconds{instance=\"srv-monitoring\"}", "refId": "A" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "s" } }
+    },
+    {
+      "id": 4,
+      "type": "stat",
+      "title": "Load (1m)",
+      "datasource": "Prometheus",
+      "gridPos": { "h": 4, "w": 6, "x": 18, "y": 0 },
+      "targets": [
+        { "expr": "node_load1{instance=\"srv-monitoring\"}", "refId": "A" }
+      ]
+    },
+    {
+      "id": 5,
+      "type": "timeseries",
+      "title": "CPU Usage %",
+      "datasource": "Prometheus",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 4 },
+      "targets": [
+        { "expr": "100 - (avg(rate(node_cpu_seconds_total{instance=\"srv-monitoring\",mode=\"idle\"}[5m])) * 100)", "legendFormat": "CPU %", "refId": "A" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "percent", "min": 0, "max": 100 } }
+    },
+    {
+      "id": 6,
+      "type": "timeseries",
+      "title": "Memory Usage %",
+      "datasource": "Prometheus",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 4 },
+      "targets": [
+        { "expr": "(1 - (node_memory_MemAvailable_bytes{instance=\"srv-monitoring\"} / node_memory_MemTotal_bytes{instance=\"srv-monitoring\"})) * 100", "legendFormat": "Memory %", "refId": "A" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "percent", "min": 0, "max": 100 } }
+    },
+    {
+      "id": 7,
+      "type": "timeseries",
+      "title": "Load Average",
+      "datasource": "Prometheus",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 12 },
+      "targets": [
+        { "expr": "node_load1{instance=\"srv-monitoring\"}", "legendFormat": "1m", "refId": "A" },
+        { "expr": "node_load5{instance=\"srv-monitoring\"}", "legendFormat": "5m", "refId": "B" },
+        { "expr": "node_load15{instance=\"srv-monitoring\"}", "legendFormat": "15m", "refId": "C" }
+      ]
+    },
+    {
+      "id": 8,
+      "type": "timeseries",
+      "title": "Swap Usage %",
+      "datasource": "Prometheus",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 12 },
+      "targets": [
+        { "expr": "(1 - (node_memory_SwapFree_bytes{instance=\"srv-monitoring\"} / node_memory_SwapTotal_bytes{instance=\"srv-monitoring\"})) * 100", "legendFormat": "Swap %", "refId": "A" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "percent", "min": 0, "max": 100 } }
+    },
+    {
+      "id": 9,
+      "type": "table",
+      "title": "Disk Usage by Mountpoint",
+      "datasource": "Prometheus",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 20 },
+      "targets": [
+        {
+          "expr": "100 - ((node_filesystem_avail_bytes{instance=\"srv-monitoring\",fstype!~\"tmpfs|overlay|squashfs\"} / node_filesystem_size_bytes{instance=\"srv-monitoring\",fstype!~\"tmpfs|overlay|squashfs\"}) * 100)",
+          "format": "table",
+          "instant": true,
+          "refId": "A"
+        }
+      ],
+      "transformations": [
+        { "id": "organize", "options": { "excludeByName": { "Time": true, "__name__": true, "job": true, "instance": true, "fstype": true }, "renameByName": { "mountpoint": "Mount", "Value": "Used %" } } }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "custom": { "cellOptions": { "type": "color-background" } },
+          "thresholds": { "mode": "absolute", "steps": [ { "color": "green", "value": null }, { "color": "orange", "value": 75 }, { "color": "red", "value": 90 } ] }
+        }
+      }
+    },
+    {
+      "id": 10,
+      "type": "timeseries",
+      "title": "Disk I/O",
+      "datasource": "Prometheus",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 20 },
+      "targets": [
+        { "expr": "sum(rate(node_disk_read_bytes_total{instance=\"srv-monitoring\"}[5m]))", "legendFormat": "Read", "refId": "A" },
+        { "expr": "sum(rate(node_disk_written_bytes_total{instance=\"srv-monitoring\"}[5m]))", "legendFormat": "Write", "refId": "B" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "Bps" } }
+    },
+    {
+      "id": 11,
+      "type": "timeseries",
+      "title": "Network Traffic",
+      "datasource": "Prometheus",
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 28 },
+      "targets": [
+        { "expr": "sum(rate(node_network_receive_bytes_total{instance=\"srv-monitoring\",device!=\"lo\"}[5m]))", "legendFormat": "Receive", "refId": "A" },
+        { "expr": "sum(rate(node_network_transmit_bytes_total{instance=\"srv-monitoring\",device!=\"lo\"}[5m]))", "legendFormat": "Transmit", "refId": "B" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "Bps" } }
+    }
+  ]
+}

@@ -1,0 +1,34 @@
+apiVersion: 1
+
+providers:
+  - name: Infrastructure
+    orgId: 1
+    folder: "Infrastructure"
+    type: file
+    disableDeletion: false
+    updateIntervalSeconds: 30
+    options:
+      path: /etc/grafana/provisioning/dashboards/json/infrastructure
+
+  # Per-host dashboards rendered by the `monitoring` role's tasks, one per
+  # inventory host (see templates/node-dashboard.json.j2).
+  - name: Nodes
+    orgId: 1
+    folder: "Nodes"
+    type: file
+    disableDeletion: false
+    updateIntervalSeconds: 30
+    options:
+      path: /etc/grafana/provisioning/dashboards/json/nodes
+
+  # zevent project dashboards (app-level, on top of the generic per-host
+  # dashboards in Nodes). Currently just PostgreSQL; srv-dev/srv-prod
+  # host metrics already live under Nodes.
+  - name: zevent
+    orgId: 1
+    folder: "zevent"
+    type: file
+    disableDeletion: false
+    updateIntervalSeconds: 30
+    options:
+      path: /etc/grafana/provisioning/dashboards/json/zevent

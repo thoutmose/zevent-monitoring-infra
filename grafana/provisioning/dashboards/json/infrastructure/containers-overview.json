@@ -1,0 +1,63 @@
+{
+  "id": null,
+  "uid": "containers-overview",
+  "title": "Containers",
+  "tags": ["cadvisor", "containers"],
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "30s",
+  "time": { "from": "now-6h", "to": "now" },
+  "panels": [
+    {
+      "id": 1,
+      "type": "stat",
+      "title": "Containers Running",
+      "datasource": "Prometheus",
+      "gridPos": { "h": 4, "w": 6, "x": 0, "y": 0 },
+      "targets": [
+        { "expr": "count(container_last_seen{name!=\"\"})", "refId": "A" }
+      ]
+    },
+    {
+      "id": 2,
+      "type": "stat",
+      "title": "Hosts Reporting",
+      "datasource": "Prometheus",
+      "gridPos": { "h": 4, "w": 6, "x": 6, "y": 0 },
+      "targets": [
+        { "expr": "count(up{job=\"cadvisor\"} == 1)", "refId": "A" }
+      ]
+    },
+    {
+      "id": 3,
+      "type": "timeseries",
+      "title": "CPU Usage by Container (top 10)",
+      "datasource": "Prometheus",
+      "gridPos": { "h": 9, "w": 24, "x": 0, "y": 4 },
+      "targets": [
+        {
+          "expr": "topk(10, sum by (instance, name) (rate(container_cpu_usage_seconds_total{name!=\"\"}[5m])))",
+          "legendFormat": "{{instance}} / {{name}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "percentunit" } }
+    },
+    {
+      "id": 4,
+      "type": "timeseries",
+      "title": "Memory Usage by Container (top 10)",
+      "datasource": "Prometheus",
+      "gridPos": { "h": 9, "w": 24, "x": 0, "y": 13 },
+      "targets": [
+        {
+          "expr": "topk(10, sum by (instance, name) (container_memory_usage_bytes{name!=\"\"}))",
+          "legendFormat": "{{instance}} / {{name}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "bytes" } }
+    }
+  ]
+}

@@ -1,0 +1,186 @@
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+rule_files:
+  - /etc/prometheus/alert_rules.yml
+
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets: ["alertmanager:9093"]
+
+scrape_configs:
+  - job_name: prometheus
+    static_configs:
+      - targets: ["localhost:9090"]
+
+  # One target per inventory host, labeled with its hostname instead of the
+  # scrape address so dashboards/alerts read "srv-dev" rather than an IP.
+  - job_name: node_exporter
+    static_configs:
+      - targets: ["192.168.1.37:9100"]
+        labels:
+          instance: "srv-dev"
+      - targets: ["192.168.1.41:9100"]
+        labels:
+          instance: "srv-staging"
+      - targets: ["192.168.1.38:9100"]
+        labels:
+          instance: "srv-prod"
+      - targets: ["192.168.1.39:9100"]
+        labels:
+          instance: "srv-db"
+      - targets: ["192.168.1.40:9100"]
+        labels:
+          instance: "srv-linux"
+      - targets: ["192.168.1.45:9100"]
+        labels:
+          instance: "srv-services"
+      - targets: ["192.168.1.43:9100"]
+        labels:
+          instance: "srv-vaultwarden"
+      - targets: ["192.168.1.44:9100"]
+        labels:
+          instance: "srv-npm"
+      - targets: ["192.168.1.46:9100"]
+        labels:
+          instance: "srv-monitoring"
+      - targets: ["192.168.1.47:9100"]
+        labels:
+          instance: "srv-agentic"
+      - targets: ["192.168.1.42:9100"]
+        labels:
+          instance: "srv-adguard"
+
+  # Per-container CPU/mem/network — one target per [docker_hosts] member
+  # (see inventory/hosts.ini). srv-adguard has no Docker, so it's the one
+  # host excluded from that group.
+  - job_name: cadvisor
+    static_configs:
+      - targets: ["192.168.1.37:8080"]
+        labels:
+          instance: "srv-dev"
+      - targets: ["192.168.1.41:8080"]
+        labels:
+          instance: "srv-staging"
+      - targets: ["192.168.1.38:8080"]
+        labels:
+          instance: "srv-prod"
+      - targets: ["192.168.1.39:8080"]
+        labels:
+          instance: "srv-db"
+      - targets: ["192.168.1.40:8080"]
+        labels:
+          instance: "srv-linux"
+      - targets: ["192.168.1.45:8085"]
+        labels:
+          instance: "srv-services"
+      - targets: ["192.168.1.43:8080"]
+        labels:
+          instance: "srv-vaultwarden"
+      - targets: ["192.168.1.44:8080"]
+        labels:
+          instance: "srv-npm"
+      - targets: ["192.168.1.46:8080"]
+        labels:
+          instance: "srv-monitoring"
+      - targets: ["192.168.1.47:8080"]
+        labels:
+          instance: "srv-agentic"
+
+  # PostgreSQL metrics for the zevent project. One exporter on srv-db
+  # reports every database on the instance via pg_stat_database; the
+  # "zevent" (prod) and "zevent-dev" (dev) databases are told apart by the
+  # "datname" label postgres_exporter attaches, not by separate jobs.
+  - job_name: postgres_exporter
+    static_configs:
+      - targets: ["192.168.1.39:9187"]
+        labels:
+          instance: "srv-db"
+
+  # ntfy's own metrics — internal-only, reached over the compose network by
+  # service name rather than a published host port (see ntfy-server.yml.j2).
+  - job_name: ntfy
+    static_configs:
+      - targets: ["ntfy:9091"]
+        labels:
+          instance: srv-monitoring
+
+  # AdGuard Home query/block stats, pulled remotely by adguard-exporter
+  # (see docker-compose.yml.j2 — srv-adguard has no Docker to run this on).
+  - job_name: adguard
+    static_configs:
+      - targets: ["adguard-exporter:9618"]
+        labels:
+          instance: srv-adguard
+
+  # Blackbox probes: is the *service* actually answering, not just the host.
+  # blackbox_http hits each target's health endpoint over HTTP;
+  # blackbox_dns resolves a query through AdGuard's own resolver. Both jobs
+  # scrape the blackbox-exporter container, which does the actual probing —
+  # see the canonical relabeling pattern in the Prometheus blackbox_exporter
+  # docs for why __address__ gets rewritten like this.
+  - job_name: blackbox_http
+    metrics_path: /probe
+    params:
+      module: [http_2xx]
+    static_configs:
+      - targets: ["http://192.168.1.43:8000"]
+        labels:
+          instance: "vaultwarden"
+      - targets: ["http://192.168.1.44:81"]
+        labels:
+          instance: "npm-admin"
+      - targets: ["http://192.168.1.42:80"]
+        labels:
+          instance: "adguard-admin"
+      - targets: ["http://ntfy:80/v1/health"]
+        labels:
+          instance: "ntfy"
+      - targets: ["http://grafana:3000"]
+        labels:
+          instance: "grafana"
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: __param_target
+      - target_label: __address__
+        replacement: blackbox-exporter:9115
+
+  - job_name: blackbox_dns
+    metrics_path: /probe
+    params:
+      module: [dns_udp]
+    static_configs:
+      - targets: ["192.168.1.42:53"]
+        labels:
+          instance: srv-adguard
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: __param_target
+      - target_label: __address__
+        replacement: blackbox-exporter:9115
+
+  # ICMP reachability for the zevent hosts (srv-dev, srv-prod) and srv-db
+  # (shared by both zevent-dev and zevent). ProbeFailure/ProbeSlowResponse
+  # in alert_rules.yml already match on probe_success/probe_duration_seconds
+  # with no job filter, so these targets get alerting for free.
+  - job_name: blackbox_ping
+    metrics_path: /probe
+    params:
+      module: [icmp]
+    static_configs:
+      - targets: ["192.168.1.37"]
+        labels:
+          instance: srv-dev
+      - targets: ["192.168.1.38"]
+        labels:
+          instance: srv-prod
+      - targets: ["192.168.1.39"]
+        labels:
+          instance: srv-db
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: __param_target
+      - target_label: __address__
+        replacement: blackbox-exporter:9115
