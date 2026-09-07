@@ -17,6 +17,9 @@ services:
     restart: unless-stopped
     environment:
       GF_SECURITY_ADMIN_PASSWORD: "CHANGEME"
+      GF_RENDERING_SERVER_URL: "http://grafana-image-renderer:8081/render"
+      GF_RENDERING_CALLBACK_URL: "http://grafana:3000/"
+      GF_RENDERING_RENDERER_TOKEN: "CHANGEME"
     volumes:
       - grafana_data:/var/lib/grafana
       - ./grafana/provisioning:/etc/grafana/provisioning:ro
@@ -24,6 +27,20 @@ services:
       - "3000:3000"
     depends_on:
       - prometheus
+      - grafana-image-renderer
+
+  # Grafana's PNG/PDF export and alert screenshots. Run as its own container
+  # rather than installed as a Grafana plugin (grafana-cli plugins install
+  # grafana-image-renderer): the stock grafana/grafana image lacks the
+  # Chromium system libraries the plugin needs, and Grafana silently drops
+  # type=renderer plugins loaded that way (found during bootstrap, 0 survive,
+  # no error logged). The dedicated grafana/grafana-image-renderer image
+  # ships those dependencies, reached over HTTP via GF_RENDERING_SERVER_URL.
+  grafana-image-renderer:
+    image: docker.io/grafana/grafana-image-renderer:latest
+    restart: unless-stopped
+    environment:
+      AUTH_TOKEN: "CHANGEME"
 
   # Routes firing/resolved alerts from Prometheus to the alertmanager-ntfy
   # bridge, which reformats them into ntfy notifications.
@@ -83,19 +100,14 @@ services:
     ports:
       - "3100:3100"
 
-  # Synthetic HTTP/DNS/ICMP checks — is the *service* (and now the *host*,
-  # via ping) actually responding. Scraped by Prometheus's blackbox_http/
-  # blackbox_dns/blackbox_ping jobs (see prometheus.yml.j2 and
-  # blackbox.yml.j2 for the probed targets). Internal-only: Prometheus
-  # reaches it by service name over the compose network, so no host port
-  # is published.
-  # NET_RAW is required for the icmp prober to open raw ping sockets from
-  # inside the container (blackbox_ping job) — not needed for http/dns.
+  # Synthetic HTTP/DNS checks — is the *service* actually responding, not
+  # just the host. Scraped by Prometheus's blackbox_http/blackbox_dns jobs
+  # (see prometheus.yml.j2 and blackbox.yml.j2 for the probed targets).
+  # Internal-only: Prometheus reaches it by service name over the compose
+  # network, so no host port is published.
   blackbox-exporter:
     image: docker.io/prom/blackbox-exporter:latest
     restart: unless-stopped
-    cap_add:
-      - NET_RAW
     volumes:
       - ./blackbox.yml:/etc/blackbox_exporter/config.yml:ro
     command:

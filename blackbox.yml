@@ -5,6 +5,17 @@ modules:
     http:
       preferred_ip_protocol: "ip4"
 
+  # Same as http_2xx but skips TLS verification — for internal services that
+  # terminate HTTPS with a self-signed cert (e.g. NiFi's UI, which refuses
+  # plain HTTP for single-user login) instead of a cert from a real CA.
+  https_2xx_insecure:
+    prober: http
+    timeout: 5s
+    http:
+      preferred_ip_protocol: "ip4"
+      tls_config:
+        insecure_skip_verify: true
+
   dns_udp:
     prober: dns
     timeout: 5s

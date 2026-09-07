@@ -7,7 +7,7 @@ groups:
       # scraping, so metrics still show up on their dashboard whenever they
       # are running.
       - alert: InstanceDown
-        expr: up{job="node_exporter", instance!~"srv-dev|srv-staging|srv-prod|srv-db|srv-linux"} == 0
+        expr: up{job="node_exporter", instance!~"srv-dev|srv-staging|srv-prod|srv-db|srv-linux|srv-agentic"} == 0
         for: 2m
         labels:
           severity: critical
@@ -86,7 +86,7 @@ groups:
       # cAdvisor down means per-container metrics/dashboards for that host
       # are blind, even though the host itself (node_exporter) may be fine.
       - alert: CadvisorDown
-        expr: up{job="cadvisor", instance!~"srv-dev|srv-staging|srv-prod|srv-db|srv-linux"} == 0
+        expr: up{job="cadvisor", instance!~"srv-dev|srv-staging|srv-prod|srv-db|srv-linux|srv-agentic"} == 0
         for: 5m
         labels:
           severity: warning
@@ -161,13 +161,88 @@ groups:
 
       - alert: PostgresLowCacheHitRatio
         expr: |
-          sum by (datname) (rate(pg_stat_database_blks_hit{instance="srv-db",datname=~"zevent.*"}[5m]))
+          sum by (datname) (pg_stat_database_blks_hit{instance="srv-db",datname=~"zevent.*"})
           /
-          (sum by (datname) (rate(pg_stat_database_blks_hit{instance="srv-db",datname=~"zevent.*"}[5m])) + sum by (datname) (rate(pg_stat_database_blks_read{instance="srv-db",datname=~"zevent.*"}[5m])))
-          * 100 < 90
+          (sum by (datname) (pg_stat_database_blks_hit{instance="srv-db",datname=~"zevent.*"}) + sum by (datname) (pg_stat_database_blks_read{instance="srv-db",datname=~"zevent.*"}))
+          * 100 < 80
         for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Low cache hit ratio on {{ $labels.datname }}"
+          description: "Cumulative buffer cache hit ratio for {{ $labels.datname }} (pg_stat_database, since last stats reset) has been below 80% for 15 minutes (current: {{ printf \"%.2f\" $value }}%) — can indicate memory pressure on srv-db. This moves slowly by design; for a fast-reacting real-time signal during an active event, see PostgresBgwriterBackendRatioHigh below."
+
+      # Matches the bgwriter:backend ratio observed during the 2026-09-05
+      # incident (~21:1 before the fix, ~8.6:1 after). Distinct from
+      # PostgresBackendBufferWritesHigh below (share of *total* buffers
+      # written by backends) — this one tracks backend writes directly
+      # against bgwriter's routine cleaning, which is what actually moved
+      # during today's fix.
+      - alert: PostgresBgwriterBackendRatioHigh
+        expr: |
+          rate(pg_stat_bgwriter_buffers_backend_total{instance="srv-db"}[5m])
+          /
+          (rate(pg_stat_bgwriter_buffers_clean_total{instance="srv-db"}[5m]) + 1e-9) > 15
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Backend buffer writes far outpacing bgwriter on {{ $labels.instance }}"
+          description: "Backends have written more than 15x as many buffers as bgwriter's routine cleaning, sustained for 15 minutes on {{ $labels.instance }} (current ratio: {{ printf \"%.1f\" $value }}:1) — bgwriter_lru_maxpages is likely undersized again for the current ingestion rate; affects zevent and zevent-dev together."
+
+      # Live pg_stat_activity/pg_stat_bgwriter checks, added to catch IO
+      # contention or a dragging checkpoint in real time during an ingestion
+      # spike (see pg_wait_events/pg_io_wait_events/pg_blocked_queries in
+      # roles/db_tools/files/postgres_exporter_queries.yaml). The
+      # bgwriter/checkpoint metrics are instance-wide (no datname) — the
+      # checkpointer is shared by the whole srv-db cluster, so these affect
+      # zevent and zevent-dev together.
+      - alert: PostgresIOContentionHigh
+        expr: sum by (datname) (pg_wait_events_backends{instance="srv-db",datname=~"zevent.*",wait_event_type="IO"}) > 5
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Backends stuck on IO wait on {{ $labels.datname }}"
+          description: "More than 5 backends on {{ $labels.datname }} have been waiting on an IO wait_event for over 2 minutes (current: {{ $value }}) — check pg_io_wait_events_backends on the dashboard for which IO event, and node_exporter disk latency on srv-db."
+
+      - alert: PostgresBlockedQueries
+        expr: pg_blocked_queries_blocked_backends{instance="srv-db",datname=~"zevent.*"} > 0
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Backends blocked on a lock on {{ $labels.datname }}"
+          description: "{{ $labels.datname }} has had at least one backend waiting on a lock for 2+ minutes (current: {{ $value }}) — see pg_blocked_queries_max_wait_seconds for how long the oldest wait has run."
+
+      - alert: PostgresCheckpointDragging
+        expr: |
+          (increase(pg_stat_bgwriter_checkpoint_write_time_total{instance="srv-db"}[5m]) + increase(pg_stat_bgwriter_checkpoint_sync_time_total{instance="srv-db"}[5m])) / 1000 / 300 * 100 > 50
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "PostgreSQL checkpoint I/O is dragging on {{ $labels.instance }}"
+          description: "The checkpointer on {{ $labels.instance }} has spent more than 50% of the last 5 minutes writing/syncing checkpoint data (current: {{ printf \"%.1f\" $value }}%) — likely IO-bound during an ingestion spike; affects both zevent and zevent-dev."
+
+      - alert: PostgresConflictsDetected
+        expr: increase(pg_stat_database_conflicts{instance="srv-db",datname=~"zevent.*"}[5m]) > 0
+        for: 0m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Recovery conflict detected on {{ $labels.datname }}"
+          description: "{{ $labels.datname }} on {{ $labels.instance }} has had at least one recovery conflict (lock/snapshot/bufferpin/tablespace/logical-slot) in the last 5 minutes — should stay at 0 in continuous operation."
+
+      - alert: PostgresBackendBufferWritesHigh
+        expr: |
+          rate(pg_stat_bgwriter_buffers_backend_total{instance="srv-db"}[5m])
+          /
+          (rate(pg_stat_bgwriter_buffers_backend_total{instance="srv-db"}[5m]) + rate(pg_stat_bgwriter_buffers_checkpoint_total{instance="srv-db"}[5m]) + rate(pg_stat_bgwriter_buffers_clean_total{instance="srv-db"}[5m]) + 1e-9)
+          * 100 > 20
+        for: 10m
         labels:
           severity: info
         annotations:
-          summary: "Low cache hit ratio on {{ $labels.datname }}"
-          description: "Buffer cache hit ratio for {{ $labels.datname }} has been below 90% for 15 minutes (current: {{ printf \"%.1f\" $value }}%) — can indicate memory pressure on srv-db."
+          summary: "Backends are flushing their own dirty buffers on {{ $labels.instance }}"
+          description: "Backends have written more than 20% of dirty buffers themselves (bypassing bgwriter/checkpointer) for 10 minutes on {{ $labels.instance }} (current: {{ printf \"%.1f\" $value }}%) — a classic sign the checkpointer can't keep up with the current write/ingestion load."

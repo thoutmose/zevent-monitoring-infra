@@ -17,3 +17,93 @@ pg_max_connections:
     - max_connections:
         usage: "GAUGE"
         description: "Configured max_connections for the instance"
+
+# Live pg_stat_activity wait-event breakdown — surfaces exactly what backends
+# are blocked on (IO, Lock, LWLock, ...) in real time, which the built-in
+# pg_stat_activity_count collector (grouped only by state) can't show.
+# Left-joined against pg_database (excluding templates), same as
+# pg_io_wait_events/pg_blocked_queries below, so zevent/zevent-dev always
+# report a wait_event_type='none'/backends=0 row instead of going missing
+# from Prometheus whenever nothing is waiting — which is the normal case
+# almost all the time. Without this the metric only existed at all while a
+# database had an active backend, so it silently disappeared from Prometheus
+# for whichever of zevent/zevent-dev was idle at scrape time. Excludes the
+# exporter's own backend (pid <> pg_backend_pid()) so its own idle connection
+# to "zevent" doesn't get counted as a waiting backend.
+pg_wait_events:
+  query: |
+    SELECT d.datname,
+           COALESCE(a.wait_event_type, 'none') AS wait_event_type,
+           count(a.pid) AS backends
+    FROM pg_database d
+    LEFT JOIN pg_stat_activity a
+      ON a.datname = d.datname AND a.pid <> pg_backend_pid()
+    WHERE d.datname NOT IN ('template0', 'template1')
+    GROUP BY d.datname, COALESCE(a.wait_event_type, 'none')
+  metrics:
+    - datname:
+        usage: "LABEL"
+        description: "Database name"
+    - wait_event_type:
+        usage: "LABEL"
+        description: "pg_stat_activity.wait_event_type ('none' when the backend isn't waiting)"
+    - backends:
+        usage: "GAUGE"
+        description: "Number of backends currently in this wait state, by database"
+
+# Detail behind wait_event_type='IO' specifically — which IO wait (disk read,
+# disk write, WAL write/sync, ...) is the actual contention, not just "IO".
+# Left-joined against pg_database (excluding templates), same as
+# pg_blocked_queries below, so zevent/zevent-dev always report a
+# wait_event='none'/backends=0 row instead of going missing from Prometheus
+# whenever nothing is IO-waiting — which is the normal case almost all the
+# time. Without this the metric only existed at all during an actual IO
+# stall, so the "IO wait detail" panel showed "No data" continuously on
+# zevent (prod), which never happened to catch a stall in the same window
+# zevent-dev did.
+pg_io_wait_events:
+  query: |
+    SELECT d.datname,
+           COALESCE(a.wait_event, 'none') AS wait_event,
+           count(a.pid) AS backends
+    FROM pg_database d
+    LEFT JOIN pg_stat_activity a
+      ON a.datname = d.datname AND a.wait_event_type = 'IO'
+    WHERE d.datname NOT IN ('template0', 'template1')
+    GROUP BY d.datname, COALESCE(a.wait_event, 'none')
+  metrics:
+    - datname:
+        usage: "LABEL"
+        description: "Database name"
+    - wait_event:
+        usage: "LABEL"
+        description: "Specific IO wait event (DataFileRead, WALWrite, ...)"
+    - backends:
+        usage: "GAUGE"
+        description: "Number of backends currently waiting on this specific IO event, by database"
+
+# Sessions actually blocked waiting for a lock right now, and how long the
+# oldest one has been waiting. Left-joined against pg_database (excluding
+# templates) so zevent/zevent-dev always report 0 rather than going missing
+# from Prometheus when nothing is blocked — pg_locks_count (built-in) can't
+# tell "held" from "waiting" since it counts all lock rows regardless of
+# grant status.
+pg_blocked_queries:
+  query: |
+    SELECT d.datname,
+           COALESCE(count(a.pid) FILTER (WHERE a.wait_event_type = 'Lock'), 0) AS blocked_backends,
+           COALESCE(EXTRACT(EPOCH FROM max(now() - a.query_start) FILTER (WHERE a.wait_event_type = 'Lock')), 0) AS max_wait_seconds
+    FROM pg_database d
+    LEFT JOIN pg_stat_activity a ON a.datname = d.datname
+    WHERE d.datname NOT IN ('template0', 'template1')
+    GROUP BY d.datname
+  metrics:
+    - datname:
+        usage: "LABEL"
+        description: "Database name"
+    - blocked_backends:
+        usage: "GAUGE"
+        description: "Number of backends currently waiting on a lock, by database"
+    - max_wait_seconds:
+        usage: "GAUGE"
+        description: "Longest a backend has been waiting on a lock right now, by database"

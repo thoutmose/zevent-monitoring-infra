@@ -943,6 +943,7 @@
       "id": 28,
       "type": "stat",
       "title": "zevent active connections",
+      "description": "No PgBouncer exporter is deployed, so the pool ceiling (~50 real connections) is marked here as a static threshold rather than a live pool metric — 100 is the hard pg_max_connections ceiling (see the panel to the left).",
       "datasource": "Prometheus",
       "gridPos": {
         "h": 4,
@@ -957,7 +958,16 @@
         }
       ],
       "fieldConfig": {
-        "defaults": {}
+        "defaults": {
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "orange", "value": 50 },
+              { "color": "red", "value": 90 }
+            ]
+          }
+        }
       }
     },
     {
@@ -988,6 +998,7 @@
       "id": 30,
       "type": "timeseries",
       "title": "zevent cache hit ratio",
+      "description": "Cumulative buffer cache hit ratio (pg_stat_database, since last stats reset) — the standard DBA metric. Moves slowly by design. Alert fires below 80% sustained for 15m. For a fast-reacting real-time signal, see 'bgwriter pressure: backend writes vs clean' below.",
       "datasource": "Prometheus",
       "gridPos": {
         "h": 8,
@@ -997,8 +1008,8 @@
       },
       "targets": [
         {
-          "expr": "sum(rate(pg_stat_database_blks_hit{instance=\"srv-db\",datname=\"zevent\"}[5m])) / (sum(rate(pg_stat_database_blks_hit{instance=\"srv-db\",datname=\"zevent\"}[5m])) + sum(rate(pg_stat_database_blks_read{instance=\"srv-db\",datname=\"zevent\"}[5m]))) * 100",
-          "legendFormat": "cache hit %",
+          "expr": "sum(pg_stat_database_blks_hit{instance=\"srv-db\",datname=\"zevent\"}) / (sum(pg_stat_database_blks_hit{instance=\"srv-db\",datname=\"zevent\"}) + sum(pg_stat_database_blks_read{instance=\"srv-db\",datname=\"zevent\"})) * 100",
+          "legendFormat": "cache hit % (cumulative, pg_stat_database)",
           "refId": "A"
         }
       ],
@@ -1052,6 +1063,355 @@
           "unit": "bytes"
         }
       }
+    },
+    {
+      "id": 33,
+      "type": "timeseries",
+      "title": "zevent connections by state",
+      "description": "pg_stat_activity broken down by state. A rising 'active' count during an ingestion spike, alongside growth elsewhere on this row, is the first sign of contention.",
+      "datasource": "Prometheus",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 92
+      },
+      "targets": [
+        {
+          "expr": "pg_stat_activity_count{instance=\"srv-db\",datname=\"zevent\"}",
+          "legendFormat": "{{state}}",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 34,
+      "type": "timeseries",
+      "title": "zevent backends by wait_event_type",
+      "description": "Live pg_stat_activity wait state. A sustained rise in 'IO' is IO contention; a rise in 'Lock' is blocking, not IO.",
+      "datasource": "Prometheus",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 92
+      },
+      "targets": [
+        {
+          "expr": "pg_wait_events_backends{instance=\"srv-db\",datname=\"zevent\"}",
+          "legendFormat": "{{wait_event_type}}",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 35,
+      "type": "timeseries",
+      "title": "zevent IO wait detail",
+      "description": "Which specific IO wait (DataFileRead/Write, WALWrite/Sync, ...) backends are stuck on right now.",
+      "datasource": "Prometheus",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 100
+      },
+      "targets": [
+        {
+          "expr": "pg_io_wait_events_backends{instance=\"srv-db\",datname=\"zevent\"}",
+          "legendFormat": "{{wait_event}}",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 36,
+      "type": "stat",
+      "title": "zevent blocked backends now",
+      "description": "Backends currently waiting on a lock (pg_stat_activity.wait_event_type = 'Lock').",
+      "datasource": "Prometheus",
+      "gridPos": {
+        "h": 8,
+        "w": 6,
+        "x": 12,
+        "y": 100
+      },
+      "targets": [
+        {
+          "expr": "pg_blocked_queries_blocked_backends{instance=\"srv-db\",datname=\"zevent\"}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "orange", "value": 1 },
+              { "color": "red", "value": 5 }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "id": 37,
+      "type": "stat",
+      "title": "zevent longest lock wait now",
+      "description": "How long the oldest currently-blocked backend has been waiting.",
+      "datasource": "Prometheus",
+      "gridPos": {
+        "h": 8,
+        "w": 6,
+        "x": 18,
+        "y": 100
+      },
+      "targets": [
+        {
+          "expr": "pg_blocked_queries_max_wait_seconds{instance=\"srv-db\",datname=\"zevent\"}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "orange", "value": 5 },
+              { "color": "red", "value": 30 }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "id": 38,
+      "type": "timeseries",
+      "title": "Checkpoints: timed vs requested (srv-db instance)",
+      "description": "Shared PostgreSQL instance (zevent + zevent-dev). 'requested' (forced, out-of-schedule) sustained above 'timed' means WAL pressure is forcing checkpoints early — an ingestion-spike symptom.",
+      "datasource": "Prometheus",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 108
+      },
+      "targets": [
+        {
+          "expr": "rate(pg_stat_bgwriter_checkpoints_timed_total{instance=\"srv-db\"}[5m])",
+          "legendFormat": "timed",
+          "refId": "A"
+        },
+        {
+          "expr": "rate(pg_stat_bgwriter_checkpoints_req_total{instance=\"srv-db\"}[5m])",
+          "legendFormat": "requested (forced)",
+          "refId": "B"
+        }
+      ]
+    },
+    {
+      "id": 39,
+      "type": "timeseries",
+      "title": "Checkpoint I/O busy % of window (srv-db instance)",
+      "description": "Share of each 5m window the checkpointer spent writing+syncing checkpoint data. Sustained >50% means a checkpoint that's dragging on.",
+      "datasource": "Prometheus",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 108
+      },
+      "targets": [
+        {
+          "expr": "(increase(pg_stat_bgwriter_checkpoint_write_time_total{instance=\"srv-db\"}[5m]) + increase(pg_stat_bgwriter_checkpoint_sync_time_total{instance=\"srv-db\"}[5m])) / 1000 / 300 * 100",
+          "legendFormat": "checkpoint I/O busy %",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "orange", "value": 50 },
+              { "color": "red", "value": 80 }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "id": 40,
+      "type": "timeseries",
+      "title": "Buffers written by source (srv-db instance)",
+      "description": "Rising 'backend (forced write)' share is the classic tell that checkpointer/bgwriter can't keep up — backends are flushing their own dirty pages under IO contention.",
+      "datasource": "Prometheus",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 116
+      },
+      "targets": [
+        {
+          "expr": "rate(pg_stat_bgwriter_buffers_checkpoint_total{instance=\"srv-db\"}[5m])",
+          "legendFormat": "checkpoint",
+          "refId": "A"
+        },
+        {
+          "expr": "rate(pg_stat_bgwriter_buffers_clean_total{instance=\"srv-db\"}[5m])",
+          "legendFormat": "bgwriter (clean)",
+          "refId": "B"
+        },
+        {
+          "expr": "rate(pg_stat_bgwriter_buffers_backend_total{instance=\"srv-db\"}[5m])",
+          "legendFormat": "backend (forced write)",
+          "refId": "C"
+        }
+      ]
+    },
+    {
+      "id": 41,
+      "type": "timeseries",
+      "title": "bgwriter maxwritten_clean stops (srv-db instance)",
+      "description": "Rate of bgwriter hitting its per-round buffer cap and stopping early. Sustained >0 means bgwriter is falling behind the dirty-page rate.",
+      "datasource": "Prometheus",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 116
+      },
+      "targets": [
+        {
+          "expr": "rate(pg_stat_bgwriter_maxwritten_clean_total{instance=\"srv-db\"}[5m])",
+          "legendFormat": "maxwritten_clean/s",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 42,
+      "type": "timeseries",
+      "title": "bgwriter pressure: backend writes vs clean (srv-db instance)",
+      "description": "The ratio that actually tracked the 2026-09-05 incident: ~21:1 before the fix, ~8.6:1 after. Alert fires above 15:1 sustained for 15m — a sign bgwriter_lru_maxpages is undersized for the current ingestion rate again.",
+      "datasource": "Prometheus",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 124
+      },
+      "targets": [
+        {
+          "expr": "rate(pg_stat_bgwriter_buffers_backend_total{instance=\"srv-db\"}[5m]) / (rate(pg_stat_bgwriter_buffers_clean_total{instance=\"srv-db\"}[5m]) + 1e-9)",
+          "legendFormat": "backend:clean ratio",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {}
+      }
+    },
+    {
+      "id": 43,
+      "type": "timeseries",
+      "title": "zevent DB growth rate (srv-db instance)",
+      "description": "Smoothed slope of on-disk database size. README estimates ~16.7GB/hour at full ingestion load — 173GB currently free on / (see Disk Usage by Mountpoint on srv-db).",
+      "datasource": "Prometheus",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 124
+      },
+      "targets": [
+        {
+          "expr": "deriv(pg_database_size_bytes{instance=\"srv-db\",datname=\"zevent\"}[15m])",
+          "legendFormat": "growth rate",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "Bps"
+        }
+      }
+    },
+    {
+      "id": 44,
+      "type": "timeseries",
+      "title": "zevent DB size projection (+1h)",
+      "description": "Linear projection from the trailing 30m slope — use during a load event to see the real (disk) limit coming before it arrives, not the cache-hit limit.",
+      "datasource": "Prometheus",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 132
+      },
+      "targets": [
+        {
+          "expr": "pg_database_size_bytes{instance=\"srv-db\",datname=\"zevent\"}",
+          "legendFormat": "current size",
+          "refId": "A"
+        },
+        {
+          "expr": "predict_linear(pg_database_size_bytes{instance=\"srv-db\",datname=\"zevent\"}[30m], 3600)",
+          "legendFormat": "projected size (+1h)",
+          "refId": "B"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "bytes"
+        }
+      }
+    },
+    {
+      "id": 45,
+      "type": "timeseries",
+      "title": "zevent recovery conflicts by type",
+      "description": "pg_stat_database_conflicts_confl_* — must stay at 0 in continuous operation. Alert fires immediately (for: 0m) on any conflict in the last 5 minutes.",
+      "datasource": "Prometheus",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 132
+      },
+      "targets": [
+        {
+          "expr": "rate(pg_stat_database_conflicts_confl_lock{instance=\"srv-db\",datname=\"zevent\"}[5m])",
+          "legendFormat": "lock",
+          "refId": "A"
+        },
+        {
+          "expr": "rate(pg_stat_database_conflicts_confl_snapshot{instance=\"srv-db\",datname=\"zevent\"}[5m])",
+          "legendFormat": "snapshot",
+          "refId": "B"
+        },
+        {
+          "expr": "rate(pg_stat_database_conflicts_confl_bufferpin{instance=\"srv-db\",datname=\"zevent\"}[5m])",
+          "legendFormat": "bufferpin",
+          "refId": "C"
+        },
+        {
+          "expr": "rate(pg_stat_database_conflicts_confl_tablespace{instance=\"srv-db\",datname=\"zevent\"}[5m])",
+          "legendFormat": "tablespace",
+          "refId": "D"
+        },
+        {
+          "expr": "rate(pg_stat_database_conflicts_confl_active_logicalslot{instance=\"srv-db\",datname=\"zevent\"}[5m])",
+          "legendFormat": "active_logicalslot",
+          "refId": "E"
+        }
+      ]
     }
   ]
 }

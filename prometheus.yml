@@ -37,6 +37,9 @@ scrape_configs:
       - targets: ["192.168.1.45:9100"]
         labels:
           instance: "srv-services"
+      - targets: ["192.168.1.47:9100"]
+        labels:
+          instance: "srv-agentic"
       - targets: ["192.168.1.43:9100"]
         labels:
           instance: "srv-vaultwarden"
@@ -46,9 +49,6 @@ scrape_configs:
       - targets: ["192.168.1.46:9100"]
         labels:
           instance: "srv-monitoring"
-      - targets: ["192.168.1.47:9100"]
-        labels:
-          instance: "srv-agentic"
       - targets: ["192.168.1.42:9100"]
         labels:
           instance: "srv-adguard"
@@ -147,6 +147,24 @@ scrape_configs:
       - target_label: __address__
         replacement: blackbox-exporter:9115
 
+  # Same idea as blackbox_http, but for internal services whose HTTPS uses a
+  # self-signed cert (module https_2xx_insecure skips TLS verification) —
+  # kept as its own job/module rather than folding into blackbox_http so
+  # that job's http_2xx targets keep real cert validation.
+  - job_name: blackbox_https_insecure
+    metrics_path: /probe
+    params:
+      module: [https_2xx_insecure]
+    static_configs:
+      - targets: ["https://192.168.1.38:8443/nifi/"]
+        labels:
+          instance: "zevent-nifi"
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: __param_target
+      - target_label: __address__
+        replacement: blackbox-exporter:9115
+
   - job_name: blackbox_dns
     metrics_path: /probe
     params:
@@ -161,10 +179,11 @@ scrape_configs:
       - target_label: __address__
         replacement: blackbox-exporter:9115
 
-  # ICMP reachability for the zevent hosts (srv-dev, srv-prod) and srv-db
-  # (shared by both zevent-dev and zevent). ProbeFailure/ProbeSlowResponse
-  # in alert_rules.yml already match on probe_success/probe_duration_seconds
-  # with no job filter, so these targets get alerting for free.
+  # ICMP reachability for hosts in blackbox_ping_targets (currently the
+  # zevent hosts srv-dev/srv-prod and srv-db, shared by both zevent-dev and
+  # zevent). ProbeFailure/ProbeSlowResponse in alert_rules.yml already match
+  # on probe_success/probe_duration_seconds with no job filter, so these
+  # targets get alerting for free.
   - job_name: blackbox_ping
     metrics_path: /probe
     params:
@@ -172,13 +191,13 @@ scrape_configs:
     static_configs:
       - targets: ["192.168.1.37"]
         labels:
-          instance: srv-dev
+          instance: "srv-dev"
       - targets: ["192.168.1.38"]
         labels:
-          instance: srv-prod
+          instance: "srv-prod"
       - targets: ["192.168.1.39"]
         labels:
-          instance: srv-db
+          instance: "srv-db"
     relabel_configs:
       - source_labels: [__address__]
         target_label: __param_target

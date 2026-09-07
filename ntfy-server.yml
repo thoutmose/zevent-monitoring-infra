@@ -1,4 +1,5 @@
 base-url: "https://ntfy.thoutmose.me"
+upstream-base-url: "https://ntfy.sh"
 
 # Reached from the internet via srv-npm; NPM terminates TLS and forwards
 # plain HTTP, so ntfy needs to trust its X-Forwarded-For/proto headers.
